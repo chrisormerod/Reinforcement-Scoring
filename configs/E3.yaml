@@ -1,0 +1,3 @@
+# MC GRPO, cold start; p_ref = initial model.
+arm: grpo
+head: mc

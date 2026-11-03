@@ -1,0 +1,3 @@
+# MC DPO, cold start; pi_ref = initial model.
+arm: dpo
+head: mc

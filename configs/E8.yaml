@@ -1,0 +1,5 @@
+# Reg SFT -> DPO; init and mu_ref = E6 (same seed). dpo_beta is beta'. Stage-2 budget (epochs) matches E11.
+arm: dpo
+head: reg
+warm_from: E6
+epochs: 3

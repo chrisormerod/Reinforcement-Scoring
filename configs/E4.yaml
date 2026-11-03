@@ -1,0 +1,5 @@
+# MC SFT -> DPO; init and pi_ref = E1 (same seed). Stage-2 budget (epochs) matches E9.
+arm: dpo
+head: mc
+warm_from: E1
+epochs: 3

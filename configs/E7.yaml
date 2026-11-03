@@ -1,0 +1,3 @@
+# Reg DPO, cold start; mu_ref = initial model. dpo_beta here is beta' = beta / sigma^2.
+arm: dpo
+head: reg

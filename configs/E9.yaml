@@ -1,0 +1,5 @@
+# Control: MC SFT -> SFT from E1. Same stage-2 budget as E4; LR reused from E1.
+arm: sft
+head: mc
+warm_from: E1
+epochs: 3

@@ -1,0 +1,5 @@
+# MC SFT -> GRPO; init and p_ref = E1 (same seed). Stage-2 budget (epochs) matches E10.
+arm: grpo
+head: mc
+warm_from: E1
+epochs: 3

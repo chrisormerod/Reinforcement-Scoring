@@ -1,0 +1,4 @@
+# Reg SFT (MSE). Baseline (Reg). Stage 1 for E8, E11.
+arm: sft
+head: reg
+save_ckpt: true

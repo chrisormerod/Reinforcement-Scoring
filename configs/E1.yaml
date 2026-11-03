@@ -1,0 +1,4 @@
+# MC SFT (cross-entropy). Baseline (MC). Stage 1 for E4, E5, E9, E10.
+arm: sft
+head: mc
+save_ckpt: true
