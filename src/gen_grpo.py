@@ -88,6 +88,6 @@ if __name__ == "__main__":
     ap.add_argument("--lr", type=float, default=2e-5); ap.add_argument("--steps", type=int, default=100); ap.add_argument("--save_steps", type=int, default=25)
     ap.add_argument("--prompts_per_step", type=int, default=8); ap.add_argument("--num_generations", type=int, default=8)
     ap.add_argument("--max_completion", type=int, default=8192); ap.add_argument("--fail_reward", type=float, default=-0.5)
-    ap.add_argument("--vllm_mem", type=float, default=0.45); ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--vllm_mem", type=float, default=0.55); ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
     for es in a.essay_sets: run(es, a)

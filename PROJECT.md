@@ -290,6 +290,16 @@ The same `Qwen/Qwen3.5-4B` is now trained, so these arms are the decoder analogu
 
 **Planned comparisons.** G5 vs G3 (SFT vs prompt only, no thinking); G6 vs G4 (DPO vs prompt only, thinking); G5 vs G6 (SFT without thinking vs DPO with thinking: two things differ at once, so read it as a system comparison, not an objective comparison); G5, G6 and G7 vs E1, E2 and E6 (generative vs encoder); G7 vs G6 (does an SFT stage on right replies help DPO), G7 vs G8 (does DPO add to SFT), G8 vs G4 (SFT alone vs prompt only), G7 vs G4 (system effect of SFT + DPO).
 
+### 6.8 Generative GRPO experiment (G9)
+
+`Qwen/Qwen3.5-4B`, thinking on, trained with GRPO from the base model using a reward function only (no gold reasoning, no pairs). Same prompt (G4's optimized rubric + suffix) and decoding (temperature 0.6, top-p 0.95) as G4/G6; evaluated with `src/gen_dpo_eval.py --exp G9` (16384 tokens, retry rule of §6.6). Code: `src/gen_grpo.py` (TRL `GRPOTrainer`, colocated vLLM with sleep mode, LoRA as in §6.7).
+
+**Reward.** QWK needs the whole sample, so it is not a per-completion reward. Its numerator is the summed squared score error, so each completion gets `r = 1 - ((pred - gold)/(max - min))^2` in [0, 1] (the `agreement_metric` of G3/G4). A truncated reply, a reply with no integer after `</think>`, or a score outside the set gets `-0.5`. Advantages are group-relative (8 completions per prompt), so the reward's scale does not matter. The denominator of QWK (expected disagreement) is not optimized. Batch QWK is logged to `batches.jsonl` as a monitor, never rewarded.
+
+**Settings (fixed, not tuned).** Set 1 first; 8 prompts x 8 completions per step, 100 steps, lr 2e-5 (cosine, 3% warmup), beta 0 (no KL), DAPO loss, one update per generation, completions capped at 8192 tokens (G4/G6 used 16384, so truncation is penalized and pushes toward shorter thinking). No checkpoint selection; the final adapter is evaluated (as G6).
+
+**Smoke test.** 2 steps, 8 completions, 2048-token cap: runs end to end on the 24 GB card with `--vllm_mem 0.55` (0.45 leaves vLLM no KV cache, 0.6 exceeds free memory); about 115 s per step at that length; `sampling/sampling_logp_difference` 0.013-0.017. Not yet checked: that the policy updates reach vLLM over many steps (the same quantity should stay small as training proceeds).
+
 ## 7. Metrics
 
 All metrics are computed per `EssaySet` on the test set (and on dev for model selection). Let `y` be the gold score and `ŷ` the predicted score on the original score scale, obtained as described in §4. `K` below is the number of score points in that `EssaySet`.
