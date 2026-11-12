@@ -55,7 +55,7 @@ def run(es, a):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--essay_sets", nargs="*", type=int, default=list(range(1, 11))); ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--limit", type=int, default=0); ap.add_argument("--exp", default="G6", choices=["G6", "G7", "G8"])
+    ap.add_argument("--limit", type=int, default=0); ap.add_argument("--exp", default="G6", choices=["G6", "G7", "G8", "G9"])
     a = ap.parse_args()
     if len(a.essay_sets) == 1: run(a.essay_sets[0], a)
     else:   # a fresh process per set, so that each merged model gets a clean GPU
