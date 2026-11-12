@@ -65,14 +65,13 @@ def train(cfg, es, seed, limit=0):
 def evaluate(cfg, es, seed, limit=0):
     """dev split only; parse failures are re-sampled up to 3 times (the retry rule of PROJECT.md 6.6)"""
     from vllm import LLM, SamplingParams
-    from vllm.lora.request import LoRARequest
     from gen_dpo_eval import reply_texts
     out, adapter = paths(cfg, es, seed)
     if (out / "dev.json").exists() and not limit: print("eval done already:", out); return
     assert adapter.exists() and (out / "train.json").exists(), f"train {cfg} set {es} seed {seed} first"
-    llm = LLM(MODEL, dtype="bfloat16", enable_lora=True, max_lora_rank=LORA["r"], max_model_len=24576, gpu_memory_utilization=0.85, seed=seed)
+    llm = LLM(str(merge_adapter(adapter)), dtype="bfloat16", max_model_len=24576, gpu_memory_utilization=0.85, seed=seed)   # merged weights: vLLM 0.28 does not apply this architecture's LoRA
     sp = SamplingParams(temperature=DECODING[True]["temperature"], top_p=DECODING[True]["top_p"], max_tokens=DECODING[True]["max_tokens"])
-    lora = LoRARequest(f"{cfg}_set{es}", 1, str(adapter))
+    lora = None   # the adapter is merged into the served weights
     scores, rubric = scores_of(es), saved_rubric("G4", es); suffix = format_suffix(scores)
     texts, y = load_split("dev", es)
     if limit: texts, y = texts[:limit], y[:limit]
@@ -85,7 +84,7 @@ def evaluate(cfg, es, seed, limit=0):
     print(f"[sweep {cfg} set{es} s{seed}] dev_qwk {fin['metrics']['qwk']:.4f} (before retry {first['metrics']['qwk']:.4f}) fail {fin['fail_rate']:.3f}", flush=True)
     if limit: return
     tr = json.load(open(out / "train.json"))
-    json.dump(dict(cfg=cfg, lr=tr["lr"], beta=tr["beta"], epochs=tr["epochs"], dev=fin["metrics"], dev_fail_rate=fin["fail_rate"], n_dev=len(y),
+    json.dump(dict(cfg=cfg, served="merged adapter weights", lr=tr["lr"], beta=tr["beta"], epochs=tr["epochs"], dev=fin["metrics"], dev_fail_rate=fin["fail_rate"], n_dev=len(y),
                    before_retry=dict(dev=first["metrics"], dev_fail_rate=first["fail_rate"]), eval_seconds=time.time() - t0), open(out / "dev.json", "w"))
 
 def run(a):

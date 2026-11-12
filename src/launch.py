@@ -2,11 +2,11 @@
 usage: python src/launch.py PHASE [--workers 3] [--essay_sets 1 2] [--seeds 0 1]
 
 Order (stage-2 arms need stage-1 checkpoints of the same seed):
-  tune1      random search for E1,E2,E3,E6,E7 on the tuning seeds   -> select1  (writes configs/tuned.json)
-  tuneseeds  E1,E6 at their selected LR on the tuning seeds (stage-1 checkpoints for tuning E4,E5,E8)
-  tune2      random search for E4,E5,E8                              -> select2
-  final1     E1,E2,E3,E6,E7 on the final seeds
-  final2     E4,E5,E8 and the controls E9,E10,E11 on the final seeds (controls reuse the stage-1 arm's LR)
+  tune1      random search for E1,E2,E3,E6,E7,E12 on the tuning seeds -> select1  (writes configs/tuned.json)
+  tuneseeds  E1,E6 at their selected LR on the tuning seeds (stage-1 checkpoints for tuning E4,E5,E8,E13)
+  tune2      random search for E4,E5,E8,E13                          -> select2
+  final1     E1,E2,E3,E6,E7,E12 on the final seeds
+  final2     E4,E5,E8,E13 and the controls E9,E10,E11 on the final seeds (controls reuse the stage-1 arm's LR; E11 also controls E13)
 Every arm gets N_CONFIGS configurations x len(TUNE_SEEDS) seeds x all essay sets; one configuration per arm is chosen by
 mean dev QWK across sets and seeds. Tuning runs live in results/tune_<E>/<cfg>; seeds >= 100 are never reported."""
 import argparse, json, subprocess, sys
@@ -17,7 +17,7 @@ import numpy as np, yaml
 ROOT = Path(__file__).resolve().parent.parent
 TUNED = ROOT / "configs" / "tuned.json"
 N_CONFIGS, TUNE_SEEDS, FINAL_SEEDS = 6, (100, 101), tuple(range(5))
-TUNE1, TUNE2 = ["E1", "E2", "E3", "E6", "E7"], ["E4", "E5", "E8"]
+TUNE1, TUNE2 = ["E1", "E2", "E3", "E6", "E7", "E12"], ["E4", "E5", "E8", "E13"]
 CONTROL_LR_FROM = {"E9": "E1", "E10": "E1", "E11": "E6"}   # controls reuse the stage-1 arm's selected LR
 ESSAY_SETS = []  # empty = all sets
 
@@ -33,6 +33,7 @@ def sample_configs(base, n=N_CONFIGS):
         p = {"lr": log(5e-6, 2e-4)}
         if c["arm"] == "dpo": p["dpo_beta"] = log(0.01, 1.0) if c["head"] == "mc" else log(0.1, 10.0)
         if c["arm"] == "grpo": p.update(G=int(rng.choice([4, 8, 16, 32])), kl_beta=float(rng.choice([0.0, 0.01, 0.1])))
+        if c["arm"] == "grpo" and c["head"] == "reg": p["grpo_sigma"] = log(0.1, 1.0)   # drawn last, so the other arms' configs are unchanged
         out.append(p)
     return out
 

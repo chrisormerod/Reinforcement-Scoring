@@ -1,9 +1,10 @@
 """G6 stage 2: DPO of Qwen3.5-4B (bf16 + LoRA, local GPU) on pairs built from the collected thinking replies (src/gen_collect.py).
-usage: python src/gen_dpo.py [--essay_sets 1 2 ...] [--seed 0] [--lr 5e-5] [--beta 0.1] [--batch 8] [--max_completion_tokens 4096] [--limit N]
+usage: python src/gen_dpo.py [--essay_sets 1 2 ...] [--seed 0] [--lr L] [--beta B] [--epochs E] [--batch 8] [--max_completion_tokens 16384] [--collect_dir collect_merged] [--limit N]
 Pairs: every training example with at least one parsable right reply and at least one parsable wrong reply gives ONE pair, chosen = a right reply and
 rejected = a wrong reply, each drawn uniformly at random (seeded) from its replies. Unparsable replies are never used.
 Policy = base + LoRA; reference = the same model with the adapter disabled (its log-probs are computed once, before training). Loss: -log sigmoid(beta * ((pi_c - ref_c) - (pi_r - ref_r))),
-log-probs summed over the whole completion (thinking and answer). The start point is the base model; one epoch.
+log-probs summed over the whole completion (thinking and answer). The start point is the base model. lr, beta and epochs default to the values in configs/tuned_G6.json (written by gen_dpo_sweep.py select); max_completion_tokens (16384), batch and schedule match the sweep.
+The pairs come from results/G6/<collect_dir> (default collect_merged: original replies pooled with the resampled ones, see gen_merge_collect.py).
 A pair whose chosen or rejected completion exceeds --max_completion_tokens is dropped (GPU memory); the number dropped and the token-length quantiles are printed and saved.
 Writes the adapter to $RF_CKPT_DIR/G6/default/set<k>/seed<s> and results/G6/default/seed<s>/set<k>/train.json. Evaluation is src/gen_dpo_eval.py."""
 import argparse, json, random, time
@@ -39,7 +40,7 @@ def completion_logp(model, prompt_ids, comp_ids, chunk=512):
 def run(es, a):
     out = ROOT / "results" / "G6" / "default" / f"seed{a.seed}" / f"set{es}"
     if (out / "train.json").exists() and not a.limit: print("done already:", out); return
-    f = ROOT / "results" / "G6" / "collect" / (f"set{es}.jsonl" if not a.limit else f"set{es}.limit.jsonl")
+    f = ROOT / "results" / "G6" / a.collect_dir / (f"set{es}.jsonl" if not a.limit else f"set{es}.limit.jsonl")
     rows = [json.loads(l) for l in open(f)]
     assert len(rows) == len(load_split("train", es)[0]) or a.limit, f"{f} has {len(rows)} examples; finish gen_collect.py first"
     rng = random.Random(a.seed)
@@ -64,29 +65,32 @@ def run(es, a):
     model.train()
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=a.lr, weight_decay=0.0)
-    T = len(enc) // a.batch; sched = get_cosine_schedule_with_warmup(opt, max(1, int(0.03 * T)), T)
-    order = np.random.default_rng(a.seed).permutation(len(enc)); curve, t0 = [], time.time()
-    for step in range(1, T + 1):
-        acc, loss_sum, margin = 0, 0.0, 0.0
-        for j in order[(step - 1) * a.batch: step * a.batch]:
-            p, cc, rr = enc[j]
-            pc, pr = completion_logp(model, p, cc), completion_logp(model, p, rr)
-            z = a.beta * ((pc - ref[j][0]) - (pr - ref[j][1]))
-            loss = -F.logsigmoid(z) / a.batch
-            loss.backward(); loss_sum += loss.item(); acc += int(z.item() > 0); margin += z.item() / a.batch
-        torch.nn.utils.clip_grad_norm_(params, 1.0); opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
-        curve.append(dict(step=step, loss=loss_sum, pref_acc=acc / a.batch, margin=margin))
-        if step % 5 == 0 or step == T: print(f"[G6 set{es} s{a.seed}] step {step}/{T} loss {loss_sum:.4f} pref_acc {acc / a.batch:.2f} margin {margin:.3f} peak_gpu_gb {torch.cuda.max_memory_allocated() / 2**30:.1f} {time.time() - t0:.0f}s", flush=True)
+    per_epoch = max(1, len(enc) // a.batch); T = per_epoch * a.epochs   # as in gen_dpo_sweep.py: a fresh permutation per epoch, one cosine schedule over all steps
+    sched = get_cosine_schedule_with_warmup(opt, max(1, int(0.03 * T)), T); curve, t0, step = [], time.time(), 0
+    for ep in range(a.epochs):
+        order = np.random.default_rng(a.seed + 1000 * ep).permutation(len(enc))
+        for k in range(per_epoch):
+            step += 1; acc, loss_sum, margin = 0, 0.0, 0.0
+            for j in order[k * a.batch: (k + 1) * a.batch]:
+                p, cc, rr = enc[j]
+                pc, pr = completion_logp(model, p, cc), completion_logp(model, p, rr)
+                z = a.beta * ((pc - ref[j][0]) - (pr - ref[j][1]))
+                loss = -F.logsigmoid(z) / a.batch
+                loss.backward(); loss_sum += loss.item(); acc += int(z.item() > 0); margin += z.item() / a.batch
+            torch.nn.utils.clip_grad_norm_(params, 1.0); opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
+            curve.append(dict(step=step, epoch=ep + 1, loss=loss_sum, pref_acc=acc / a.batch, margin=margin))
+            if step % 5 == 0 or step == T: print(f"[G6 set{es} s{a.seed}] step {step}/{T} loss {loss_sum:.4f} pref_acc {acc / a.batch:.2f} margin {margin:.3f} peak_gpu_gb {torch.cuda.max_memory_allocated() / 2**30:.1f} {time.time() - t0:.0f}s", flush=True)
     if a.limit: return
     model.save_pretrained(CKPT_DIR / "G6" / "default" / f"set{es}" / f"seed{a.seed}")
     out.mkdir(parents=True, exist_ok=True)
-    json.dump(dict(exp="G6", seed=a.seed, essay_set=es, lora=LORA, lr=a.lr, beta=a.beta, batch=a.batch, epochs=1, steps=T, pairs=stats, curve=curve,
+    json.dump(dict(exp="G6", seed=a.seed, essay_set=es, lora=LORA, lr=a.lr, beta=a.beta, batch=a.batch, epochs=a.epochs, steps=T, pairs=stats, curve=curve,
                    train_seconds=time.time() - t0), open(out / "train.json", "w"))
     del model, opt; torch.cuda.empty_cache()
 
 if __name__ == "__main__":
+    tuned = json.load(open(ROOT / "configs" / "tuned_G6.json"))   # selected on dev QWK by gen_dpo_sweep.py select
     ap = argparse.ArgumentParser(); ap.add_argument("--essay_sets", nargs="*", type=int, default=list(range(1, 11))); ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--lr", type=float, default=5e-5); ap.add_argument("--beta", type=float, default=0.1); ap.add_argument("--batch", type=int, default=8)
-    ap.add_argument("--max_completion_tokens", type=int, default=4096); ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--lr", type=float, default=tuned["lr"]); ap.add_argument("--beta", type=float, default=tuned["beta"]); ap.add_argument("--epochs", type=int, default=tuned["epochs"]); ap.add_argument("--batch", type=int, default=8)
+    ap.add_argument("--max_completion_tokens", type=int, default=16384); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--collect_dir", default="collect_merged")
     a = ap.parse_args()
     for es in a.essay_sets: run(es, a)

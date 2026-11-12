@@ -38,6 +38,29 @@ def test_grpo_loss_diagnostics_and_zero_kl_at_reference():
     loss, d = train_grpo.make_loss(dict(G=8, kl_beta=0.1), env("mc", z, 16))(z, y, torch.arange(16))
     assert abs(d["d_kl_ref"].item()) < 1e-6 and 0 <= d["d_nondeg"].item() <= 1
 
+# ---------------------------------------------------------------- GRPO, single target (Gaussian policy)
+def test_grpo_reg_reward_is_exact_match_of_nearest_score():
+    zv = torch.tensor([-1.2, -0.4, 0.4, 1.2]); y = torch.tensor([0, 3, 1])
+    mu = torch.tensor([-1.2, 1.2, 1.2])                    # on the gold score / on the gold score / on a wrong score
+    a, cls, r, adv = train_grpo.grpo_terms_reg(mu, y, zv, 1e-3, 8, gen())
+    assert (r[0] == 1).all() and (r[1] == 1).all() and (r[2] == 0).all() and adv.abs().max() < 1e-3   # tiny sigma: every group is degenerate
+    assert (cls[2] == 3).all() and set(r.unique().tolist()) <= {0., 1.}
+
+def test_grpo_reg_zero_kl_at_reference_and_kl_formula():
+    N = 16; mu = torch.randn(N, 1); y = torch.randint(0, K, (N,))
+    cfg = dict(G=8, kl_beta=0.1, grpo_sigma=0.5)
+    _, d = train_grpo.make_loss(cfg, env("reg", mu.clone(), N))(mu, y, torch.arange(N))
+    assert abs(d["d_kl_ref"].item()) < 1e-7 and abs(d["d_drift"].item()) < 1e-7
+    _, d = train_grpo.make_loss(cfg, env("reg", mu.clone(), N))(mu + 0.3, y, torch.arange(N))
+    assert abs(d["d_kl_ref"].item() - 0.3 ** 2 / (2 * 0.5 ** 2)) < 1e-6      # KL(N(m, s^2) || N(m0, s^2)) = (m - m0)^2 / (2 s^2)
+
+def test_grpo_reg_gradient_raises_mu_when_gold_is_above_and_lowers_it_when_below():
+    # the group is only informative when some samples are right: sigma wide enough to reach the gold bin from mu
+    for gold, sign in ((3, -1), (0, +1)):                  # loss gradient < 0 means descent raises mu
+        mu = torch.zeros(64, 1, requires_grad=True); y = torch.full((64,), gold)
+        train_grpo.make_loss(dict(G=64, kl_beta=0.0, grpo_sigma=0.8), env("reg", torch.zeros(64, 1), 64))(mu, y, torch.arange(64))[0].backward()
+        assert sign * mu.grad.sum().item() > 0
+
 # ---------------------------------------------------------------- DPO, multiple targets
 def test_dpo_rejected_never_gold_and_uniform():
     y = torch.zeros(20000, dtype=torch.long)

@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CKPT_DIR = Path(os.environ.get("RF_CKPT_DIR", Path.home() / "rf_ckpt"))
 DEFAULTS = dict(arm="sft", head="mc", lr=2e-5, batch_size=8, epochs=10, max_steps=None, warmup_frac=0.06, weight_decay=0.01,
                 eval_every=50, patience=None, grad_clip=1.0, warm_from=None, warm_tag=None, save_ckpt=False,
-                G=8, kl_beta=0.0, dpo_beta=0.1)   # dpo_beta is beta for mc and beta' = beta / sigma^2 for reg
+                G=8, kl_beta=0.0, dpo_beta=0.1,   # dpo_beta is beta for mc and beta' = beta / sigma^2 for reg
+                grpo_sigma=0.5)                   # reg GRPO only: fixed std of the Gaussian policy on the standardized scale
 
 def seed_all(s):
     random.seed(s); np.random.seed(s); torch.manual_seed(s); torch.cuda.manual_seed_all(s)
@@ -198,6 +199,6 @@ def main(make_loss, arm):
     a = ap.parse_args()
     cfg = load_cfg(a.config, a.set)
     assert cfg["arm"] == arm, f"config arm {cfg['arm']} != {arm}"
-    if arm == "grpo": assert cfg["head"] == "mc", "GRPO is defined for the multiple-target head only"
+    if arm == "grpo" and cfg["head"] == "reg": assert cfg["grpo_sigma"] > 0, "regression GRPO needs grpo_sigma > 0 (Gaussian policy std)"
     for es in a.essay_sets:   # one model per essay set; finished sets are skipped, so a crashed job resumes
         run(cfg, make_loss, a.exp or Path(a.config).stem, a.seed, a.tag, es)

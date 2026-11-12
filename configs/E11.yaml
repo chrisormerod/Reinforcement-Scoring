@@ -1,4 +1,4 @@
-# Control: Reg SFT -> SFT from E6. Same stage-2 budget as E8; LR reused from E6.
+# Control: Reg SFT -> SFT from E6. Same stage-2 budget as E8 and E13; LR reused from E6.
 arm: sft
 head: reg
 warm_from: E6

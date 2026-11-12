@@ -11,6 +11,24 @@ INT_RE = re.compile(r"-?\d+")
 # standard LoRA values (PROJECT.md section 6.7); "all-linear" = every linear layer of the decoder except the output head
 LORA = dict(r=16, lora_alpha=32, lora_dropout=0.05, target_modules="all-linear")
 
+def merged_dir(adapter):
+    return Path(str(adapter) + "_merged")
+
+def merge_adapter(adapter):
+    """Fold a trained LoRA adapter into the base weights and save a plain model next to it (<adapter>_merged), returning that path. Done on the CPU so it does not compete for the GPU.
+    WHY: vLLM 0.28 accepts this architecture's adapter but does not apply it (greedy outputs and log-probs were identical with and without it), so evaluation must serve merged weights instead.
+    The merged directory is reused if it exists; delete it to force a re-merge."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from peft import PeftModel
+    out = merged_dir(adapter)
+    if (out / "config.json").exists() and any(out.glob("*.safetensors")): return out
+    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16)
+    model = PeftModel.from_pretrained(model, str(adapter)).merge_and_unload()
+    out.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(out); AutoTokenizer.from_pretrained(MODEL).save_pretrained(out)
+    return out
+
 def answer_suffix(scores):   # G5 only: the reply format the model is trained to produce
     return f'Reply in the form "Answer: <score>", where <score> is one of {", ".join(map(str, scores))}.'
 

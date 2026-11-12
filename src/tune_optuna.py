@@ -17,8 +17,8 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "results" / "optuna"
 TUNED = ROOT / "configs" / "tuned_optuna.json"
 TUNE_SEEDS = (100, 101)
-STAGE1, STAGE2 = ["E1", "E2", "E3", "E6", "E7"], ["E4", "E5", "E8"]
-STAGE1_OF = {"E4": "E1", "E5": "E1", "E8": "E6"}
+STAGE1, STAGE2 = ["E1", "E2", "E3", "E6", "E7", "E12"], ["E4", "E5", "E8", "E13"]
+STAGE1_OF = {"E4": "E1", "E5": "E1", "E8": "E6", "E13": "E6"}
 STEP_RE = re.compile(r"step (\d+) dev_qwk (-?[\d.]+)")
 
 cfg_of = lambda base: yaml.safe_load(open(ROOT / "configs" / f"{base}.yaml"))
@@ -32,6 +32,7 @@ def suggest(trial, base):
     if c["arm"] == "grpo":
         p["G"] = trial.suggest_categorical("G", [4, 8, 16, 32, 64])
         p["kl_beta"] = trial.suggest_categorical("kl_beta", [0.0, 0.01, 0.1, 1.0])
+        if c["head"] == "reg": p["grpo_sigma"] = trial.suggest_float("grpo_sigma", 0.1, 1.0, log=True)   # Gaussian policy std (standardized scale)
     return p
 
 def command(base, seed, essay_set, tag, params, extra=()):

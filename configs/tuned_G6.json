@@ -1,0 +1,10 @@
+{
+ "cfg": "c3",
+ "lr": 5e-05,
+ "beta": 0.1,
+ "epochs": 3,
+ "mean_dev_qwk": 0.781773600326931,
+ "essay_sets": [
+  1
+ ]
+}
