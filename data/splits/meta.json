@@ -1,0 +1,94 @@
+{
+ "max_len": 256,
+ "split_seed": 0,
+ "dev_frac": 0.1,
+ "gold_column": "Score1",
+ "model": "answerdotai/ModernBERT-base",
+ "test_score_column": "essay_score",
+ "sets": {
+  "1": {
+   "scores": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "pct_truncated": 0.0
+  },
+  "2": {
+   "scores": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "pct_truncated": 0.0
+  },
+  "3": {
+   "scores": [
+    0,
+    1,
+    2
+   ],
+   "pct_truncated": 0.0
+  },
+  "4": {
+   "scores": [
+    0,
+    1,
+    2
+   ],
+   "pct_truncated": 0.0
+  },
+  "5": {
+   "scores": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "pct_truncated": 0.0012376237623762376
+  },
+  "6": {
+   "scores": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "pct_truncated": 0.0
+  },
+  "7": {
+   "scores": [
+    0,
+    1,
+    2
+   ],
+   "pct_truncated": 0.0
+  },
+  "8": {
+   "scores": [
+    0,
+    1,
+    2
+   ],
+   "pct_truncated": 0.004323656578134651
+  },
+  "9": {
+   "scores": [
+    0,
+    1,
+    2
+   ],
+   "pct_truncated": 0.003708281829419036
+  },
+  "10": {
+   "scores": [
+    0,
+    1,
+    2
+   ],
+   "pct_truncated": 0.0027100271002710027
+  }
+ }
+}
