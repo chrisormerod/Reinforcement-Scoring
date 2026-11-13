@@ -85,6 +85,7 @@ def completion_logps(model, prompt_ids, comp_ids):
 def run(es, a):
     import torch
     from transformers import get_cosine_schedule_with_warmup
+    from tqdm.auto import tqdm
     out = ROOT / "results" / "G9" / "default" / f"seed{a.seed}" / f"set{es}"
     if (out / "train.json").exists() and not a.limit: print("done already:", out); return
     scores, rubric = scores_of(es), saved_rubric("G4", es)
@@ -106,7 +107,8 @@ def run(es, a):
     reward_fn = make_reward(scores, a.fail_reward, out_log)
     rng = np.random.default_rng(a.seed); order = []
     log_history = []; t0 = time.time()
-    for step in range(1, steps + 1):
+    bar = tqdm(range(1, steps + 1), desc=f"G9 set{es} s{a.seed}", dynamic_ncols=True)
+    for step in bar:
         if len(order) < a.prompts_per_step: order += rng.permutation(len(prompts)).tolist()
         idx, order = order[:a.prompts_per_step], order[a.prompts_per_step:]
         P, C, G = [], [], []   # per completion: prompt ids, completion ids, gold
@@ -128,7 +130,8 @@ def run(es, a):
         opt.step(); sched.step()
         rec = dict(step=step, reward=float(r.mean()), reward_std=float(rg.std(1).mean()), frac_zero_std_groups=float((rg.std(1) < 1e-8).mean()),
                    mean_len=float(np.mean([len(c) for c in C])), grad_norm=gn, lr=sched.get_last_lr()[0], elapsed=time.time() - t0)
-        log_history.append(rec); print(json.dumps(rec), flush=True)
+        log_history.append(rec); bar.set_postfix(reward=f"{rec['reward']:.3f}", len=int(rec['mean_len']), gn=f"{gn:.2f}")
+        tqdm.write(json.dumps(rec))
         if not a.limit and a.save_steps and step % a.save_steps == 0 and step < steps: model.save_pretrained(work / f"checkpoint-{step}")
         torch.cuda.empty_cache()
     secs = time.time() - t0
