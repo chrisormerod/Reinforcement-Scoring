@@ -60,4 +60,4 @@ if __name__ == "__main__":
     if len(a.essay_sets) == 1: run(a.essay_sets[0], a)
     else:   # a fresh process per set, so that each merged model gets a clean GPU
         for es in a.essay_sets:
-            subprocess.run([sys.executable, __file__, "--essay_sets", str(es), "--seed", str(a.seed)] + (["--limit", str(a.limit)] if a.limit else []))
+            subprocess.run([sys.executable, __file__, "--essay_sets", str(es), "--seed", str(a.seed), "--exp", a.exp] + (["--limit", str(a.limit)] if a.limit else []))
