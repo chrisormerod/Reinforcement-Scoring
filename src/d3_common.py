@@ -1,4 +1,4 @@
-"""Shared pieces for the decision-model arms (D1-D5): vllm-sr/d3-mini, a Qwen3.5-4B classifier that returns a probability per option instead of text.
+"""Shared pieces for the decision-model arms (D1-D5): vllm-sr/d3-mini and vllm-sr/d3-flash (both run through the same code, selected with --model), classifiers that returns a probability per option instead of text.
 Request mapping: state = the student response; one `score` question per essay set: instructions = everything in the rubric file before the per-level text (prompt, passage,
 preamble), criteria = the ordered per-level texts (one per score point of the set). Level i of the model is score point scores[i].
 Training path: the packaged d3 class refuses to train (train(True) raises, inference_mode, frozen backbone, no save_pretrained), so this module rebuilds its plain logits path WITH gradients:
@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 from common import ROOT, scores_of, load_split
 
-D3_ID = "vllm-sr/d3-mini"
+MODELS = {"d3-mini": "vllm-sr/d3-mini", "d3-flash": "vllm-sr/d3-flash"}   # name -> Hugging Face id; the name is also the results/<exp>/<name>/ directory
 D3_API = os.environ.get("D3_API_BASE", "http://localhost:8000/v1")
 CKPT_DIR = Path(os.environ.get("RF_CKPT_DIR", Path.home() / "rf_ckpt"))
 LEVEL = re.compile(r"(?i)^(?:#+\s*|\*\*\s*)?(?:score(?:\s+point)?\s*)?(\d+)(?:\s*-?\s*points?)?\s*[:.]?\s*\**\s*:?\s*$")
@@ -44,7 +44,7 @@ def original_rubric(es):
 def question(instructions, criteria):
     return {"score": dict(type="score", instructions=instructions, criteria=list(criteria))}
 
-def systemone(state, questions, model=D3_ID, api=None, timeout=300):
+def systemone(state, questions, model, api=None, timeout=300):
     """one /v1/systemone call; returns the parsed JSON (raises on HTTP errors)"""
     body = json.dumps(dict(model=model, state=state, questions=questions)).encode()
     req = urllib.request.Request(f"{api or D3_API}/systemone", body, {"Content-Type": "application/json"})
@@ -55,9 +55,9 @@ def probs_of(resp, n):
     a = resp.get("answers", {}).get("score", {}).get("probabilities")
     return None if a is None else [float(a[str(i)]) for i in range(n)]
 
-def load_text(es, source):
-    """(instructions, criteria) for set es: the original rubric, or the optimized text of experiment `source` (D2) saved as results/<source>/default/seed0/set<es>/prompt.json"""
+def load_text(es, source, model):
+    """(instructions, criteria) for set es: the original rubric, or the optimized text of experiment `source` (D2) saved as results/<source>/<model>/seed0/set<es>/prompt.json"""
     if source == "original": return original_rubric(es)
-    f = ROOT / "results" / source / "default" / "seed0" / f"set{es}" / "prompt.json"
+    f = ROOT / "results" / source / model / "seed0" / f"set{es}" / "prompt.json"
     assert f.exists(), f"{f} is missing: run {source} on set {es} first"
     d = json.load(open(f)); return d["instructions"], d["criteria"]

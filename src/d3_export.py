@@ -1,4 +1,4 @@
-"""Merge a train_d3.py LoRA adapter into a servable copy of vllm-sr/d3-mini.
+"""Merge a train_d3.py LoRA adapter into a servable copy of a vllm-sr d3 model (--model d3-mini|d3-flash).
 usage: python src/d3_export.py --exp D3|D4|D5 --essay_set K [--seed 0] [--limit_adapter]   (run in ~/ml; CPU/GPU light)
 Writes <adapter dir>_merged/: every file of the package is symlinked EXCEPT the backbone weight shards and their index, which are rewritten with W' = W + (alpha/r) * B @ A for every adapted linear layer
 (computed in fp32, stored bf16, same tensor names and shard layout as the original; readout.safetensors and decision_config.json are untouched). MODEL_MANIFEST.json still lists the ORIGINAL hashes, so a
@@ -7,17 +7,17 @@ import argparse, json, shutil
 from pathlib import Path
 import torch
 from safetensors.torch import load_file, save_file
-from d3_common import CKPT_DIR, D3_ID
+from d3_common import CKPT_DIR, MODELS
 from d3_model import LORA
 
-def snapshot():
+def snapshot(model):
     from huggingface_hub import snapshot_download
-    return Path(snapshot_download(D3_ID))
+    return Path(snapshot_download(MODELS[model]))
 
-def merge(adapter_dir):
+def merge(adapter_dir, model):
     adapter_dir = Path(adapter_dir); out = Path(str(adapter_dir) + "_merged")
     if (out / "model.safetensors.index.json").exists(): return out
-    src = snapshot(); out.mkdir(parents=True, exist_ok=True)
+    src = snapshot(model); out.mkdir(parents=True, exist_ok=True)
     ad = torch.load(adapter_dir / "adapter.pt"); scale = LORA["lora_alpha"] / LORA["r"]
     pairs = {}
     for n, t in ad.items():   # base_model.model.<module path>.lora_A.default.weight
@@ -41,5 +41,5 @@ def merge(adapter_dir):
     print(f"merged {used} modules into {out}"); return out
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--exp", required=True); ap.add_argument("--essay_set", type=int, required=True); ap.add_argument("--seed", type=int, default=0); ap.add_argument("--limit_adapter", action="store_true")
-    a = ap.parse_args(); merge(CKPT_DIR / a.exp / "default" / f"set{a.essay_set}" / (f"seed{a.seed}" + ("_limit" if a.limit_adapter else "")))
+    ap = argparse.ArgumentParser(); ap.add_argument("--exp", required=True); ap.add_argument("--model", default="d3-mini", choices=list(MODELS)); ap.add_argument("--essay_set", type=int, required=True); ap.add_argument("--seed", type=int, default=0); ap.add_argument("--limit_adapter", action="store_true")
+    a = ap.parse_args(); merge(CKPT_DIR / a.exp / a.model / f"set{a.essay_set}" / (f"seed{a.seed}" + ("_limit" if a.limit_adapter else "")), a.model)

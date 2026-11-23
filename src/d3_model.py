@@ -1,18 +1,18 @@
-"""Trainable view of vllm-sr/d3-mini (see d3_common.py for why it has to be rebuilt). Uses the runtime's own objects: its tokenizer/prompt code (`prepare`), its backbone, readout and temperature;
+"""Trainable view of a vllm-sr d3 model (d3-mini or d3-flash) (see d3_common.py for why it has to be rebuilt). Uses the runtime's own objects: its tokenizer/prompt code (`prepare`), its backbone, readout and temperature;
 only the logits step is re-implemented (with gradients, optional per-layer checkpointing, and a LoRA adapter on the text decoder's linear layers).
 Run in ~/ml (transformers 5.17.0, peft); the packaged class itself refuses train mode, so nothing here calls D3Model.train."""
 import os
 os.environ.setdefault("D3_FUSED", "0")   # no fused inference layers in the backbone we train
 import torch, torch.nn as nn
 from torch.utils.checkpoint import checkpoint
-from d3_common import D3_ID
+from d3_common import MODELS
 LORA = dict(r=16, lora_alpha=32, lora_dropout=0.05)   # standard LoRA values; target = every linear layer of the text decoder
 
 class D3Policy:
-    def __init__(self, seed=0, lora=True, device="cuda", grad_ckpt=True):
+    def __init__(self, model, seed=0, lora=True, device="cuda", grad_ckpt=True):
         from transformers import AutoModel
         torch.manual_seed(seed)
-        self.model = AutoModel.from_pretrained(D3_ID, trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(MODELS[model], trust_remote_code=True)
         self.rt = self.model._require()
         assert self.rt.fast is None, f"the fast inference path is active ({self.rt.fast}); set D3_FUSED=0"
         assert self.rt.encoder is not None, "this checkpoint is causal; D3Policy implements the noncausal encoder path"

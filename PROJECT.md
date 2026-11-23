@@ -8,7 +8,7 @@ A research comparison of fine-tuning objectives for an automated short answer sc
 
 A separate model is trained for each `EssaySet` (prompt) in the dataset, so every experiment below is run once per `EssaySet`.
 
-**Extension (§6.5):** five decision-model experiments (D1–D5) score the same test sets with `vllm-sr/d3-mini`, a Qwen3.5-4B-based classifier, zero-shot, with an optimized rubric, and fine-tuned with LoRA (SFT, DPO, GRPO). They are comparators for the fine-tuned encoders, not part of the E-arm training study.
+**Extension (§6.5):** five decision-model experiments (D1–D5) score the same test sets with two decision models, `vllm-sr/d3-mini` (D3-mini) and `vllm-sr/d3-flash` (D3-flash), classifiers, zero-shot, with an optimized rubric, and fine-tuned with LoRA (SFT, DPO, GRPO). They are comparators for the fine-tuned encoders, not part of the E-arm training study.
 
 ---
 
@@ -18,7 +18,7 @@ A separate model is trained for each `EssaySet` (prompt) in the dataset, so ever
 - **RQ3 (head type).** Under SFT, does a single-target regression head differ from a multiple-target classification head, given that the MSE loss carries ordinal information that cross-entropy does not?
 - **RQ4 (preference training for regression).** Do DPO and GRPO work with a regression head from a cold start, relative to regression SFT?
 - **RQ5 (stability and imbalance).** How do the objectives differ in training stability, sample efficiency, and drift of the predicted score distribution toward or away from common scores?
-- **RQ6 (decision model).** How does `d3-mini` with the human rubric compare with the fine-tuned ModernBERT arms, how much does optimizing only the rubric text with MIPROv2 close the gap, and do LoRA SFT, DPO and GRPO on the same model behave as they do on the encoder?
+- **RQ6 (decision model).** How do D3-mini and D3-flash with the human rubric compare with the fine-tuned ModernBERT arms, how much does optimizing only the rubric text with MIPROv2 close the gap, and do LoRA SFT, DPO and GRPO on the same model behave as they do on the encoder?
 
 ## 2. Is This a Cogent Idea? (Design Rationale)
 
@@ -211,6 +211,9 @@ Six experiments are run for every `EssaySet`: SFT, DPO and GRPO for each head ty
 DPO with all `K−1` rejected scores averaged vs one random rejected score; fixed vs resampled rejected pairs; low-data regimes (5%, 10%, 25% of training data); on-policy DPO for regression; ordinal partial-credit rewards or ordinal-aware pairing; ordinal losses (EMD/CORAL) for classification.
 
 ### 6.5 Decision-model experiments (D1-D5)
+
+**Two models, same experiments.** Every D experiment is run once per model and the models are distinguished by name everywhere: `--model d3-mini` (`vllm-sr/d3-mini`, the default) or `--model d3-flash` (`vllm-sr/d3-flash`). Results are written to `results/<D#>/<model>/seed<s>/set<k>/`, adapters to `$RF_CKPT_DIR/<D#>/<model>/`, and D2's optimized text is per model (`results/D2/<model>/...`; D3-D5 read the text of the same model). Everything below was specified, built and checked on d3-mini; **d3-flash has not been run yet and its architecture, request interface and output format are assumed to match d3-mini** (the trainer asserts the noncausal encoder path, and the served model must expose `/v1/systemone`). Verify with a smoke test before the full run, and record any differences here.
+
 
 `vllm-sr/d3-mini` (Decision 3.0, vLLM Semantic Router; built on Qwen3.5-4B, 4.54B parameters incl. a vision encoder) is a classifier, not a chat model: it generates no text and returns a probability for every option. It is served on `/v1/systemone` (vLLM >= 0.33.0, loaded with `trust_remote_code`; transformers 5.17.0 pinned by the model card), not on `/v1/chat/completions`, so it cannot use a Qwen3.5-4B chat server (which D2 uses only as the MIPROv2 instruction proposer). A request has `state` (the text to judge) and `questions`; a `score` question has 2-10 levels with `instructions` and per-level `criteria`; the prompt is fixed by the runtime (a top-level `instructions` field is rejected). Not stated by the model card or recipe (to be verified by a smoke test before D3): the response schema, whether the logits are differentiable through the HF class, and any fine-tuning support.
 
