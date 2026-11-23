@@ -6,7 +6,7 @@ os.environ.setdefault("D3_FUSED", "0")   # no fused inference layers in the back
 import torch, torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 from d3_common import D3_ID
-LORA = dict(r=16, lora_alpha=32, lora_dropout=0.05)   # the G5/G6 values (src/gen_local.py); target = every linear layer of the text decoder
+LORA = dict(r=16, lora_alpha=32, lora_dropout=0.05)   # standard LoRA values; target = every linear layer of the text decoder
 
 class D3Policy:
     def __init__(self, seed=0, lora=True, device="cuda", grad_ckpt=True):

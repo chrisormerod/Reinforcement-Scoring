@@ -3,7 +3,7 @@ usage: python src/train_d3.py --mode sft|dpo|grpo [--essay_sets 3 ...] [--seed 0
 All three start from the BASE d3-mini weights with a fresh LoRA adapter (r16, alpha 32, dropout 0.05, every linear layer of the text decoder) and the same request (`--text`: the original rubric split into
 instructions + per-level criteria, or D2's optimized text from results/D2/default/seed0/set<k>/prompt.json). The model's output is a distribution over the set's K score levels, p = softmax(logits / T).
   sft  (D3): loss = -log p(gold), mean over the batch (PROJECT.md 5.1).
-  dpo  (D4): one pair per example, chosen = gold level, rejected = a level exactly ONE score point off (adjacent value, direction drawn once with a fixed seed, one neighbour at the ends; the rule of src/gen_seeded.py);
+  dpo  (D4): one pair per example, chosen = gold level, rejected = a level exactly ONE score point off (adjacent value, direction drawn once with a fixed seed, one neighbour at the ends; the same draw as the other preference arms);
              loss = -log sigmoid(beta * ((log p(c) - log p_ref(c)) - (log p(r) - log p_ref(r)))), reference = the base model (adapter off), its log-probs computed once before training (5.3).
   grpo (D5): per prompt sample --group levels from p, reward 1 if the sampled level is gold else 0, advantage = (r - mean) / (std + 1e-4) per group, loss = -(1/(B G)) sum A log p(a) + kl * KL(p || p_ref),
              one on-policy update per batch so no clipping (5.5); the reference is the base model (adapter off) and is only evaluated when --kl > 0.
@@ -12,14 +12,14 @@ results/D<n>/default/seed<s>/set<k>/train.json. Export for serving: src/d3_expor
 import argparse, json, random, time
 import numpy as np, torch, torch.nn.functional as F
 from transformers import get_cosine_schedule_with_warmup
-from gen_common import ROOT, scores_of, load_split
+from common import ROOT, scores_of, load_split
 from d3_common import CKPT_DIR, question, original_rubric, load_text
 from d3_model import D3Policy, LORA
 
 EXP = dict(sft="D3", dpo="D4", grpo="D5")
 
 def wrong_level(seed, es, i, k, K):
-    """index of a level exactly one score point off gold index k (same draw as src/gen_seeded.py)"""
+    """index of a level exactly one score point off gold index k (seeded draw per example)"""
     nb = [j for j in (k - 1, k + 1) if 0 <= j < K]
     return random.Random(f"{seed}-{es}-{i}").choice(nb)
 

@@ -7,7 +7,7 @@ The merged folder of a trained arm is deleted afterwards unless --keep (it is 9 
 import argparse, json, shutil, subprocess, time, os, signal, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-from gen_common import ROOT, scores_of, load_split
+from common import ROOT, scores_of, load_split
 from eval import all_metrics, bootstrap_ci
 from d3_common import CKPT_DIR, D3_ID, question, load_text, systemone, probs_of
 from d3_export import merge

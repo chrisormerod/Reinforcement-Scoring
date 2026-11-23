@@ -7,7 +7,7 @@ left-padded prompt tokens (made by the runtime's own `prepare`, so the prompt is
 import json, os, re, urllib.request
 from pathlib import Path
 import numpy as np
-from gen_common import ROOT, scores_of, load_split
+from common import ROOT, scores_of, load_split
 
 D3_ID = "vllm-sr/d3-mini"
 D3_API = os.environ.get("D3_API_BASE", "http://localhost:8000/v1")

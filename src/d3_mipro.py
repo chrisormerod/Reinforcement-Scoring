@@ -1,21 +1,58 @@
 """D2: MIPROv2 optimizes the text that d3-mini is shown, and nothing else.
-usage: VLLM_API_BASE=http://10.151.66.182:8000/v1 python src/d3_mipro.py [--essay_sets 1 ...] [--auto light] [--n_train 100] [--limit N] [--port 8000] [--threads 16] ; then python src/d3_eval.py --exp D2
+usage: VLLM_API_BASE=<proposer-url> python src/d3_mipro.py [--essay_sets 1 ...] [--auto light] [--n_train 100] [--limit N] [--port 8000] [--threads 16] ; then python src/d3_eval.py --exp D2
 Task model = d3-mini through /v1/systemone (a thin dspy.BaseLM, `D3LM`: DSPy sends it a system message = the candidate text and a user message = the student response; it parses the candidate text back into
-instructions + per-level criteria with split_rubric, calls the server and answers with the argmax score value). Instruction proposer = the Qwen3.5-4B chat server at $VLLM_API_BASE (thinking off), as in G4.
+instructions + per-level criteria with split_rubric, calls the server and answers with the argmax score value). Instruction proposer = the Qwen3.5-4B chat server at $VLLM_API_BASE (thinking off), (thinking off).
 The program has ONE predictor whose instruction is the whole rubric text in the original files' layout (prompt/passage/preamble, then one '##### Score N' section per score point), so MIPROv2 rewrites instructions
-and criteria together. No demos (the interface has no slot for them). Metric = agreement_metric (1 - squared score distance / squared range) of the argmax prediction, as G3/G4. Trainset = a seeded random subset of
+and criteria together. No demos (the interface has no slot for them). Metric = agreement_metric (1 - squared score distance / squared range) of the argmax prediction,. Trainset = a seeded random subset of
 --n_train training examples, valset = the dev split; the test split is untouched here (d3_eval.py reads it once, afterwards).
 Parsing rule: a candidate whose text splits into a non-empty section for every score point (split_rubric) gives the model its own instructions AND criteria; any other candidate (the proposer often drops the
 '##### Score N' headings) is used as the INSTRUCTIONS with the original per-level criteria kept, so every candidate is a valid request and none is wasted. The saved prompt.json is the same function of the final text.
 Writes results/D2/default/seed0/set<k>/{prompt.json (instructions, criteria: what d3_eval.py and train_d3.py --text D2 read), rubric.md, optimize.json}."""
-import argparse, json, time
+import argparse, json, os, re, time, urllib.request
 import dspy, numpy as np
 from dspy.teleprompt import MIPROv2
-from gen_common import ROOT, scores_of, MinimalAdapter, make_lm, make_program, agreement_metric, API_BASE
-from gen_mipro import examples
+from common import ROOT, scores_of, load_split
 from d3_common import D3_ID, split_rubric, original_rubric, question, systemone, probs_of
 from d3_eval import Server
 SEED = 0
+
+# --- DSPy plumbing for the proposer LM and the scoring program (Qwen3.5-4B chat server, thinking off) ---
+API_BASE = os.environ.get("VLLM_API_BASE", "")   # Qwen3.5-4B chat server used only as MIPROv2's instruction proposer
+MODEL = "Qwen/Qwen3.5-4B"
+
+class ScoreSig(dspy.Signature):
+    response: str = dspy.InputField()
+    score: int = dspy.OutputField()
+
+class MinimalAdapter(dspy.ChatAdapter):
+    """Scoring calls (response -> score) use D3Adapter.format below; MIPROv2's own proposal calls use DSPy's default chat format. The answer is the integer the D3LM returns."""
+    def __init__(self, scores, **kw): super().__init__(**kw)
+    def parse(self, signature, completion):
+        if set(signature.input_fields) != {"response"} or set(signature.output_fields) != {"score"}: return super().parse(signature, completion)
+        m = re.search(r"-?\d+", completion)
+        return {"score": int(m.group()) if m else None}
+
+def make_lm(thinking, **kw):
+    with urllib.request.urlopen(f"{API_BASE}/models", timeout=15) as r: ids = [m["id"] for m in json.load(r)["data"]]
+    assert MODEL in ids, f"{API_BASE} serves {ids}, not {MODEL}"
+    return dspy.LM(f"openai/{MODEL}", api_base=API_BASE, api_key="EMPTY", cache=False, num_retries=3,
+                   extra_body={"chat_template_kwargs": {"enable_thinking": thinking}}, **{**dict(temperature=0.0, max_tokens=64), **kw})
+
+def make_program(rubric): return dspy.Predict(ScoreSig.with_instructions(rubric))
+
+def agreement_metric(scores):
+    """per-example metric for MIPROv2: 1 - squared score distance / squared range; unparseable = 0 (a per-example surrogate for QWK)"""
+    r2 = float(max(scores) - min(scores)) ** 2
+    def metric(example, pred, trace=None):
+        p = getattr(pred, "score", None)
+        return 0.0 if p is None else max(0.0, 1.0 - (p - example.score) ** 2 / r2)
+    return metric
+
+def examples(split, es, n=None):
+    texts, y = load_split(split, es)
+    ex = [dspy.Example(response=t, score=s).with_inputs("response") for t, s in zip(texts, y)]
+    if n and n < len(ex): ex = [ex[i] for i in np.random.default_rng(SEED).choice(len(ex), n, replace=False)]
+    return ex
 
 def parse_candidate(text, scores, crit0):
     """(instructions, criteria, criteria_rewritten) of a candidate text"""
