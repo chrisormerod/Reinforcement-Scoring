@@ -4,20 +4,19 @@ A research comparison of fine-tuning objectives for an automated short answer sc
 
 - **Multiple-target head (classification):** `K` logits, one per score point; the model is a categorical policy over scores.
 - **Single-target head (regression):** one scalar output `μ_θ(x)`; treated as the mean of a Gaussian policy over scores when a policy is needed.
-- **Objectives:** SFT (cross-entropy for classification, MSE for regression), DPO (gold score preferred over a random alternative score), and GRPO (group-relative policy optimization with a binary exact-match reward). SFT can also be used as a first stage before DPO or GRPO.
+- **Objectives:** SFT (cross-entropy for classification, MSE for regression), DPO (gold score preferred over a random alternative score), and GRPO (group-relative policy optimization with a binary exact-match reward). Every objective is trained directly from the pretrained backbone; there is no SFT-then-DPO/GRPO stage.
 
 A separate model is trained for each `EssaySet` (prompt) in the dataset, so every experiment below is run once per `EssaySet`.
 
-**Extension (§6.6):** five decision-model experiments (D1–D5) score the same test sets with `vllm-sr/d3-mini`, a Qwen3.5-4B-based classifier, zero-shot, with an optimized rubric, and fine-tuned with LoRA (SFT, DPO, GRPO). They are comparators for the fine-tuned encoders, not part of the E1–E13 training study.
+**Extension (§6.5):** five decision-model experiments (D1–D5) score the same test sets with `vllm-sr/d3-mini`, a Qwen3.5-4B-based classifier, zero-shot, with an optimized rubric, and fine-tuned with LoRA (SFT, DPO, GRPO). They are comparators for the fine-tuned encoders, not part of the E-arm training study.
 
 ---
 
 ## 1. Research Questions
 
 - **RQ1 (objectives from scratch, classification).** Starting from the same initialization, how do DPO and GRPO compare with cross-entropy SFT on QWK, SMD, accuracy, and score-distribution fidelity (KL / Jeffreys)?
-- **RQ2 (sequential training, classification).** Does following SFT with DPO or GRPO improve on SFT alone, after controlling for extra training (via the continued-SFT controls)?
 - **RQ3 (head type).** Under SFT, does a single-target regression head differ from a multiple-target classification head, given that the MSE loss carries ordinal information that cross-entropy does not?
-- **RQ4 (preference training for regression).** Do DPO and GRPO work with a regression head, from a cold start and as a second stage after regression SFT, again relative to a continued-SFT control?
+- **RQ4 (preference training for regression).** Do DPO and GRPO work with a regression head from a cold start, relative to regression SFT?
 - **RQ5 (stability and imbalance).** How do the objectives differ in training stability, sample efficiency, and drift of the predicted score distribution toward or away from common scores?
 - **RQ6 (decision model).** How does `d3-mini` with the human rubric compare with the fine-tuned ModernBERT arms, how much does optimizing only the rubric text with MIPROv2 close the gap, and do LoRA SFT, DPO and GRPO on the same model behave as they do on the encoder?
 
@@ -38,7 +37,7 @@ Yes, as a study. Each head defines a policy, so all three objectives are well de
 **DPO (classification)**
 - For a categorical policy, the softmax normalizer cancels in the DPO log-ratio, so the preference margin between two scores is the **logit difference** `z_w − z_l`, shifted by the reference model's margin. DPO reduces to a pairwise logistic loss on logits.
 - Cross-entropy equals `log(1 + Σ_{r≠y} exp(z_r − z_y))`, which pushes against all `K−1` competitors at once. A single-pair DPO loss `log(1 + exp(z_l − z_w))` involves one random competitor, so it is a per-example lower bound on CE with a sparser gradient. Expect slower per-step convergence from a cold start.
-- DPO is offline (pairs come from the labeled data) and needs a reference policy. From a random head the reference margin is near zero, so cold-start DPO is close to reference-free. The reference term does real work only after SFT.
+- DPO is offline (pairs come from the labeled data) and needs a reference policy. From a random head the reference margin is near zero, so cold-start DPO is close to reference-free. With no SFT stage, the reference term stays near zero throughout, so DPO here is effectively reference-free.
 
 **DPO (regression)**
 - Model the policy as `π_θ(a | x) = N(μ_θ(x), σ²)` with fixed σ. Then for a pair (chosen `y_w`, rejected `y_l`):
@@ -53,7 +52,7 @@ Yes, as a study. Each head defines a policy, so all three objectives are well de
   margin = β · (y_w − y_l) · (μ_θ − μ_ref) / σ²
   ```
 
-- This margin depends on μ only through its **displacement from the reference** (the pair midpoint cancels). It rewards moving μ up when the gold score is above the rejected one and down otherwise, but it never anchors μ at `y_w`. From a cold start, the net push for a given gold score is roughly toward `y − mean(other scores)`, which preserves the *direction* of the signal (higher gold, higher μ) but not the *scale*. **Prediction:** cold-start DPO on a regression head learns a roughly monotone ranking signal with an unanchored scale, so it needs validation-tuned thresholds to be useful and may underperform regression SFT. It should be most useful as a second stage after SFT, where μ_ref is already well-calibrated. Note that `β` and `σ²` enter only as `β/σ²`, so there is a single effective temperature. This derivation is mine; verify it empirically (it is part of the analysis in §9).
+- This margin depends on μ only through its **displacement from the reference** (the pair midpoint cancels). It rewards moving μ up when the gold score is above the rejected one and down otherwise, but it never anchors μ at `y_w`. From a cold start, the net push for a given gold score is roughly toward `y − mean(other scores)`, which preserves the *direction* of the signal (higher gold, higher μ) but not the *scale*. **Prediction:** cold-start DPO on a regression head learns a roughly monotone ranking signal with an unanchored scale, so it needs validation-tuned thresholds to be useful and may underperform regression SFT. Note that `β` and `σ²` enter only as `β/σ²`, so there is a single effective temperature. This derivation is mine; verify it empirically (it is part of the analysis in §9).
 - Like exact-match GRPO, classification DPO as specified uses no ordinal information: rejecting score 0 is as strong against gold 1 as against gold 4. Regression DPO does weight pairs by `|y_w − y_l|`.
 
 ## 3. Task and Data
@@ -93,8 +92,8 @@ Yes, as a study. Each head defines a policy, so all three objectives are well de
 - **Tokenization:** same tokenizer, max length, and truncation policy for all arms; record the percent of examples truncated per `EssaySet`.
 - **Splits:** the fixed train / dev / test splits from §3.1. Check for exact-duplicate `EssayText` across splits within each set and remove or reassign duplicates so they appear in one split only.
 - **Optimizer:** AdamW, same LR schedule family, warmup, weight decay, and bf16 precision. Learning rates are tuned per arm (see §6).
-- **Seeds:** minimum 5 seeds per configuration. Sequential arms and controls use the **same seed's** stage-1 checkpoint, so paired comparisons are valid.
-- **Budget accounting:** report examples seen and wall-clock for every arm. For sequential arms and controls, report the stage-1 and stage-2 budgets separately and in total.
+- **Seeds:** minimum 5 seeds per configuration. The same seed gives the same backbone initialization and head initialization across arms, so paired comparisons are valid.
+- **Budget accounting:** report examples seen and wall-clock for every arm.
 
 ### Mapping predictions to scores
 
@@ -127,7 +126,7 @@ For each example `(x_i, y_i)`: chosen `y_w = y_i`; rejected `y_l` drawn uniforml
 L_DPO(θ) = - (1/B) Σ_i log σ( β · [ (z_w − z_l)_θ − (z_w − z_l)_ref ] )
 ```
 
-Reference `π_ref`: frozen initial model (cold start) or the SFT checkpoint (sequential). Instrument preference accuracy (`z_w > z_l`), mean margin, and the gap between preference accuracy and top-1 accuracy. If `K = 2`, the rejected score is deterministic.
+Reference `π_ref`: frozen initial model. Instrument preference accuracy (`z_w > z_l`), mean margin, and the gap between preference accuracy and top-1 accuracy. If `K = 2`, the rejected score is deterministic.
 
 ### 5.4 DPO, single target (regression)
 
@@ -137,7 +136,7 @@ Same pairs as 5.3, with the Gaussian-policy margin from §2:
 L_DPO-Reg(θ) = - (1/B) Σ_i log σ( β' · (y_w − y_l) · (μ_θ(x_i) − μ_ref(x_i)) ),    β' = β / σ²
 ```
 
-(`y` values on the standardized scale.) Reference `μ_ref`: frozen initial model (cold start) or the regression-SFT checkpoint (sequential). Instrument preference accuracy (`sign(μ_θ − μ_ref)` agrees with `sign(y_w − y_l)`), the drift `μ_θ − μ_ref`, and the correlation between μ and gold score.
+(`y` values on the standardized scale.) Reference `μ_ref`: frozen initial model. Instrument preference accuracy (`sign(μ_θ − μ_ref)` agrees with `sign(y_w − y_l)`), the drift `μ_θ − μ_ref`, and the correlation between μ and gold score.
 
 ### 5.5 GRPO, multiple targets (binary exact-match reward)
 
@@ -151,11 +150,11 @@ For each input `x_i`:
 L_GRPO(θ) = - (1/(B·G)) Σ_{i,j} A_{i,j} · log p_θ(a_{i,j} | x_i)  +  β_KL · KL(p_θ ‖ p_ref)
 ```
 
-`p_ref` is the frozen initial policy (cold start) or the SFT checkpoint (sequential). `β_KL` may be 0 in the base configuration.
+`p_ref` is the frozen initial policy. `β_KL` may be 0 in the base configuration.
 
 **Behaviors to instrument, not hide**
 - **Degenerate groups:** if all `G` samples are right or all wrong, std = 0 and the advantage is 0. Log the fraction of groups with non-zero advantage.
-- **Cold start:** a random head gives near-uniform samples, so the signal is weak early. This is why SFT → GRPO is included.
+- **Cold start:** a random head gives near-uniform samples, so the signal is weak early. Expect GRPO to learn slowly and to be the weakest arm.
 - **Compute:** the `G` draws come from one forward pass per input, so GRPO here is cheap but noisy.
 
 ### 5.6 GRPO, single target (regression; Gaussian policy)
@@ -172,64 +171,46 @@ For each input `x_i`:
 L_GRPO-Reg(θ) = - (1/(B·G)) Σ_{i,j} A_{i,j} · log N(a_{i,j}; μ_θ(x_i), σ_g²)  +  β_KL · (1/B) Σ_i (μ_θ(x_i) − μ_ref(x_i))² / (2 σ_g²)
 ```
 
-The second term is the exact `KL(N(μ_θ, σ_g²) ‖ N(μ_ref, σ_g²))`. `μ_ref` is the frozen initial model (cold start, E12) or the regression-SFT checkpoint (sequential, E13).
+The second term is the exact `KL(N(μ_θ, σ_g²) ‖ N(μ_ref, σ_g²))`. `μ_ref` is the frozen initial model (E12).
 
 **Behaviors to instrument, not hide**
-- **Degenerate groups:** if all `G` samples fall in the gold score's bin, or none do, the advantage is 0. With a cold-start head `μ ≈ 0` and a small `σ_g`, most groups for gold scores far from the mean are all-wrong, so the signal is weaker than in the classification case. This is why SFT → GRPO (E13) is included.
+- **Degenerate groups:** if all `G` samples fall in the gold score's bin, or none do, the advantage is 0. With a cold-start head `μ ≈ 0` and a small `σ_g`, most groups for gold scores far from the mean are all-wrong, so the signal is weaker than in the classification case. Expect E12 to learn slowly.
 - **Scale:** the gradient on μ is proportional to `A · (a − μ) / σ_g²`, so `σ_g` sets both exploration and effective step size (gradient clipping applies). It is the one hyperparameter with no classification counterpart.
 - **Logged diagnostics:** mean reward, fraction of groups with non-zero advantage, drift `μ_θ − μ_ref` (signed and absolute), KL to the reference, and the correlation between μ and the gold score.
 - **Sampling:** a Gaussian action can land outside the observed score range; it is mapped to the nearest end score, so tail samples are not discarded.
 
 ## 6. Experiments
 
-Thirteen experiments are run for every `EssaySet`: ten core experiments (E1–E8, E12, E13) and three continued-SFT controls (E9–E11). E12 and E13 were added to complete the grid (regression GRPO, cold and after SFT); the numbering keeps E1–E11 unchanged. "MC" = multiple-target (classification) head; "Reg" = single-target (regression) head.
+Six experiments are run for every `EssaySet`: SFT, DPO and GRPO for each head type, all trained from the pretrained backbone with a random head (cold start). The IDs keep their original numbering (E4, E5, E8–E11 and E13, the SFT → DPO / GRPO arms and their continued-SFT controls, were dropped and archived in `results/_retired_sequential/`). "MC" = multiple-target (classification) head; "Reg" = single-target (regression) head.
 
-### 6.1 Core experiments
+### 6.1 Experiments
 
-| ID | Head | Training | Init / reference | Role |
-|---|---|---|---|---|
-| E1 | MC | SFT (cross-entropy) | pretrained + random head | **Baseline (MC)** |
-| E2 | MC | DPO | cold start; `π_ref` = initial model | Objective from scratch |
-| E3 | MC | GRPO | cold start; `p_ref` = initial model | Objective from scratch |
-| E4 | MC | SFT → DPO | init from E1; `π_ref` = E1 | Sequential |
-| E5 | MC | SFT → GRPO | init from E1; `p_ref` = E1 | Sequential |
-| E6 | Reg | SFT (MSE) | pretrained + random head | **Baseline (Reg)** |
-| E7 | Reg | DPO | cold start; `μ_ref` = initial model | Objective from scratch |
-| E8 | Reg | SFT → DPO | init from E6; `μ_ref` = E6 | Sequential |
-| E12 | Reg | GRPO (Gaussian policy, §5.6) | cold start; `μ_ref` = initial model | Objective from scratch |
-| E13 | Reg | SFT → GRPO (Gaussian policy, §5.6) | init from E6; `μ_ref` = E6 | Sequential |
+| ID | Head | Training | Init / reference |
+|---|---|---|---|
+| E1 | MC | SFT (cross-entropy) | pretrained + random head |
+| E2 | MC | DPO | `π_ref` = initial model |
+| E3 | MC | GRPO | `p_ref` = initial model |
+| E6 | Reg | SFT (MSE) | pretrained + random head |
+| E7 | Reg | DPO | `μ_ref` = initial model |
+| E12 | Reg | GRPO (Gaussian policy, §5.6) | `μ_ref` = initial model |
 
-### 6.2 Controls: continued SFT
+### 6.2 Planned comparisons
 
-Without these, any gain from "SFT → X" cannot be separated from simply training longer. Each control starts from the same stage-1 checkpoint as the arm it controls, then continues the same SFT objective for the same stage-2 budget (same number of additional examples seen and the same LR schedule family and warmup), with checkpoint selection by dev QWK as in the controlled arm.
+- **Objectives, classification (RQ1):** E1 vs E2 vs E3.
+- **Objectives, regression (RQ4):** E6 vs E7 vs E12.
+- **Head type (RQ3):** E1 vs E6 for SFT, E2 vs E7 for DPO, E3 vs E12 for GRPO.
 
-| ID | Head | Training | Init | Matched to | Role |
-|---|---|---|---|---|---|
-| E9 | MC | SFT → SFT (continued cross-entropy) | init from E1 | Stage 2 of E4 (DPO) | Extra-training control |
-| E10 | MC | SFT → SFT (continued cross-entropy) | init from E1 | Stage 2 of E5 (GRPO) | Extra-training control |
-| E11 | Reg | SFT → SFT (continued MSE) | init from E6 | Stage 2 of E8 (DPO) and E13 (GRPO) | Extra-training control |
+### 6.3 Tuning protocol and compute
 
-### 6.3 Planned comparisons
-
-- **Objectives from scratch (RQ1):** E1 vs E2 vs E3.
-- **Sequential vs SFT alone (RQ2, RQ4):** E1 vs E4, E1 vs E5, E6 vs E8, E6 vs E13.
-- **Sequential vs matched extra training (RQ2, RQ4):** E4 vs E9, E5 vs E10, E8 vs E11, E13 vs E11. These are the decisive comparisons for whether DPO or GRPO adds anything beyond more SFT.
-- **Extra training alone:** E1 vs E9, E1 vs E10, E6 vs E11.
-- **Head type (RQ3):** E1 vs E6; also E2 vs E7 and E4 vs E8 for DPO, and E3 vs E12 and E5 vs E13 for GRPO.
-- **Cold start vs warm start:** E2 vs E4, E3 vs E5, E7 vs E8, E12 vs E13.
-- **Regression objectives (RQ4):** E6 vs E7 vs E12 from scratch; E8 vs E13 after SFT (DPO vs GRPO on the same head).
-
-### 6.4 Tuning protocol and compute
-
-- Every arm gets the same tuning budget (number of configurations and seeds). Searched hyperparameters: learning rate (all arms); `β_dpo` (E2, E4, E7, E8); group size `G` and `β_KL` (E3, E5, E12, E13); Gaussian policy scale `σ_g` (E12, E13; log-uniform on [0.1, 1] in standardized units); σ or equivalently `β'` (E7, E8). Controls reuse the learning rate selected for their stage-1 SFT arm. Report the search space and the selected values. Selection is by dev QWK.
+- Every arm gets the same tuning budget (number of configurations and seeds). Searched hyperparameters: learning rate (all arms); `β_dpo` (E2, E7); group size `G` and `β_KL` (E3, E12); Gaussian policy scale `σ_g` (E12; log-uniform on [0.1, 1] in standardized units); σ or equivalently `β'` (E7). Report the search space and the selected values. Selection is by dev QWK.
 - **Assumption:** to keep the budget tractable across 10 `EssaySet`s, one hyperparameter configuration is selected per arm using dev QWK averaged across sets, rather than tuning separately for each set. Revisit if the sets differ greatly in size or `K`.
-- Scale of the study: 11 experiments × 10 `EssaySet`s × 5 seeds is 550 final runs, before tuning. Sequential arms and controls reuse stage-1 checkpoints, so stage 1 is trained once per set and seed.
+- Scale of the study: 6 experiments × 10 `EssaySet`s × 5 seeds is 300 final runs, before tuning.
 
-### 6.5 Optional ablations (out of scope for the headline study)
+### 6.4 Optional ablations (out of scope for the headline study)
 
 DPO with all `K−1` rejected scores averaged vs one random rejected score; fixed vs resampled rejected pairs; low-data regimes (5%, 10%, 25% of training data); on-policy DPO for regression; ordinal partial-credit rewards or ordinal-aware pairing; ordinal losses (EMD/CORAL) for classification.
 
-### 6.6 Decision-model experiments (D1-D5)
+### 6.5 Decision-model experiments (D1-D5)
 
 `vllm-sr/d3-mini` (Decision 3.0, vLLM Semantic Router; built on Qwen3.5-4B, 4.54B parameters incl. a vision encoder) is a classifier, not a chat model: it generates no text and returns a probability for every option. It is served on `/v1/systemone` (vLLM >= 0.33.0, loaded with `trust_remote_code`; transformers 5.17.0 pinned by the model card), not on `/v1/chat/completions`, so it cannot use a Qwen3.5-4B chat server (which D2 uses only as the MIPROv2 instruction proposer). A request has `state` (the text to judge) and `questions`; a `score` question has 2-10 levels with `instructions` and per-level `criteria`; the prompt is fixed by the runtime (a top-level `instructions` field is rejected). Not stated by the model card or recipe (to be verified by a smoke test before D3): the response schema, whether the logits are differentiable through the HF class, and any fine-tuning support.
 
@@ -295,7 +276,7 @@ Jeffreys(P,Q) = KL(P ‖ Q) + KL(Q ‖ P)
 **Aggregation, uncertainty, and reporting**
 - **Per set:** mean ± std over seeds for every metric, for every `EssaySet` and arm.
 - **Headline:** the unweighted mean over the 10 `EssaySet`s of each metric (each set's value being its mean over seeds). Because `K` and difficulty differ by set, also report per-set tables and do not pool examples across sets.
-- **Significance:** for each planned comparison in §6.3, a paired Wilcoxon signed-rank test across the 10 `EssaySet`s (using per-set seed means), plus per-set paired bootstrap or Wilcoxon tests across seeds.
+- **Significance:** for each planned comparison in §6.2, a paired Wilcoxon signed-rank test across the 10 `EssaySet`s (using per-set seed means), plus per-set paired bootstrap or Wilcoxon tests across seeds.
 - Bootstrap confidence intervals over test examples for single runs.
 - Learning curves (dev QWK vs. examples seen), a table of true vs. predicted score counts for the best run per arm, and confusion matrices as descriptive figures only (not metrics).
 
@@ -305,11 +286,11 @@ Jeffreys(P,Q) = KL(P ‖ Q) + KL(Q ‖ P)
 - DPO (Reg): preference accuracy, drift `μ_θ − μ_ref`, correlation of μ with gold score
 - Gradient norm statistics per arm, used to check the GRPO `p_y · ∇log p_y` relationship and the single-pair-DPO lower-bound-of-CE argument from §2
 
+
 ## 8. Risks and Threats to Validity
 
-- **Hyperparameter fairness:** GRPO has `G`, `β_KL`, and advantage normalization; DPO has `β_dpo` and pairing strategy; regression DPO adds σ. Give all arms equal tuning budgets. Sharing one configuration across `EssaySet`s (§6.4) may favor some sets over others.
+- **Hyperparameter fairness:** GRPO has `G`, `β_KL`, and advantage normalization; DPO has `β_dpo` and pairing strategy; regression DPO adds σ. Give all arms equal tuning budgets. Sharing one configuration across `EssaySet`s (§6.2) may favor some sets over others.
 - **Threshold advantage for regression:** regression arms fit `K−1` thresholds on dev, which classification arms do not. Report the rounding-based results as well, and keep the procedure identical across regression arms.
-- **Extra-training confound:** SFT → X arms see more total training than SFT alone. Controls E9–E11 address this; the comparison is valid only if the stage-2 budgets are truly matched, so log and verify them.
 - **Small sets and rare scores:** per-set training data may be small and some score points rare, which makes DPO's random rejection, GRPO's exact-match reward, and the KL / Jeffreys estimates noisy. Smoothing (§7) keeps divergences finite but does not remove this noise.
 - **Label noise/rater disagreement:** `Score1` is a single rater's score. All objectives treat it as ground truth; if human agreement is low, every arm is bounded by it. Note which score the test file's solution provides, and confirm it is the same scoring convention.
 - **Class imbalance:** exact-match reward, CE, and uniform random rejection favor majority classes differently (with DPO, rare classes appear more often as rejected than as chosen). Interpret KL / Jeffreys divergence between true and predicted distributions with this in mind.
@@ -323,12 +304,12 @@ Jeffreys(P,Q) = KL(P ‖ Q) + KL(Q ‖ P)
 1. Data loading and validation per `EssaySet`: join test scores, label mapping, dev split, duplicate checks; E1 and E6 baselines on one pilot set.
 2. DPO (MC and Reg) and GRPO implementations with unit tests (reward, advantage, degenerate groups; margin identities: logit difference for MC, `β'(y_w − y_l)(μ − μ_ref)` for Reg).
 3. Threshold-fitting and evaluation pipeline; verify metrics on known inputs.
-4. Pilot all of E1–E13 on one `EssaySet` and a small seed count to confirm that budgets match for the controls and to estimate total compute.
-5. Run E1–E13 across all 10 `EssaySet`s and 5 seeds.
+4. Pilot all six E arms on one `EssaySet` and a small seed count to estimate total compute.
+5. Run E1, E2, E3, E6, E7, E12 across all 10 `EssaySet`s and 5 seeds.
 6. Decision-model arms: D1/D2 (inference, MIPROv2), then D3-D5 (LoRA) after a smoke test of each script.
 7. Analysis: planned comparisons, gradient diagnostics, check of the §2 predictions (including the regression-DPO scale-anchoring prediction), and write-up.
 
 ## 10. Open Items
 
 - Confirm the row identifier and score column names for joining `public_leaderboard_solution.csv` to `public_leaderboard_rel_2.tsv`.
-- Compute available (GPU type, hours), which determines seed count and tuning breadth given the 10-set scale (§6.4).
+- Compute available (GPU type, hours), which determines seed count and tuning breadth given the 10-set scale (§6.3).

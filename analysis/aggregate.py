@@ -8,29 +8,22 @@ import numpy as np, pandas as pd
 from scipy.stats import wilcoxon
 
 ROOT = Path(__file__).resolve().parent.parent
-EXPS = [f"E{i}" for i in range(1, 12)]
+EXPS = ["E1", "E2", "E3", "E6", "E7", "E12"]
 MET = ["qwk", "acc", "smd", "abs_smd", "kl_true_pred", "jeffreys"]
 HIGHER_BETTER = {"qwk", "acc"}
-REG = {"E6", "E7", "E8", "E11"}
+REG = {"E6", "E7", "E12"}
 # section 6.3
-COMPARISONS = [("Objectives from scratch (RQ1)", [("E1", "E2"), ("E1", "E3"), ("E2", "E3")]),
-               ("Sequential vs SFT alone (RQ2, RQ4)", [("E1", "E4"), ("E1", "E5"), ("E6", "E8")]),
-               ("Sequential vs matched extra training (RQ2, RQ4)", [("E4", "E9"), ("E5", "E10"), ("E8", "E11")]),
-               ("Extra training alone", [("E1", "E9"), ("E1", "E10"), ("E6", "E11")]),
-               ("Head type (RQ3)", [("E1", "E6"), ("E2", "E7"), ("E4", "E8")]),
-               ("Cold vs warm start", [("E2", "E4"), ("E3", "E5"), ("E7", "E8")])]
-# stage-2 budget pairs that must match (section 6.2)
-MATCHED = [("E4", "E9"), ("E5", "E10"), ("E8", "E11")]
+COMPARISONS = [("Objectives from scratch, classification (RQ1)", [("E1", "E2"), ("E1", "E3"), ("E2", "E3")]),
+               ("Objectives from scratch, regression (RQ4)", [("E6", "E7"), ("E6", "E12"), ("E7", "E12")]),
+               ("Head type (RQ3)", [("E1", "E6"), ("E2", "E7"), ("E3", "E12")])]
 
 def load(tag="default"):
     rows, curves, counts = [], [], []
     for f in sorted(glob.glob(str(ROOT / f"results/E*/{tag}/seed*/set*/metrics.json"))):
         m = json.load(open(f))
         if m["seed"] >= 100 or m["exp"] not in EXPS: continue
-        s1 = m["stage1"] or {}
         row = dict(exp=m["exp"], seed=m["seed"], set=m["essay_set"], dev_qwk=m["dev"]["qwk"], lr=m["cfg"]["lr"], steps=m["steps"],
-                   examples_stage1=s1.get("examples_seen", 0), examples_stage2=m["examples_seen"] if s1 else 0, examples_total=m["examples_seen"] + s1.get("examples_seen", 0),
-                   time_stage1=s1.get("train_time", 0.0), time_stage2=m["total_train_time"] if s1 else 0.0, time_total=m["total_train_time"] + s1.get("train_time", 0.0),
+                   examples_seen=m["examples_seen"], train_time=m["total_train_time"],
                    best_step=m["best_step"])
         for k in MET:
             row[k] = abs(m["test"]["smd"]) if k == "abs_smd" else m["test"][k]
@@ -72,20 +65,6 @@ def compare(df, a, b, metric):
     wins_a = int((diff > 0).sum() if metric in HIGHER_BETTER else (diff < 0).sum())
     return f"{diff.mean():+.4f}", f"{p:.3f}", f"{wins_a}/{len(sets)}", f"{sig}/{len(sets)}"
 
-def budget_checks(df):
-    out = []
-    for a, b in MATCHED:
-        da, db = df[df.exp == a].set_index(["seed", "set"]), df[df.exp == b].set_index(["seed", "set"])
-        common = da.index.intersection(db.index)
-        ok = len(common) > 0 and (da.loc[common, "examples_stage2"] == db.loc[common, "examples_stage2"]).all() and (da.loc[common, "steps"] == db.loc[common, "steps"]).all()
-        out.append(f"- {a} vs {b}: stage-2 examples {'MATCH' if ok else 'MISMATCH (or no common runs)'} over {len(common)} paired runs")
-    return out
-
-def step0_table(df, counts_best=None):
-    """per arm: sets whose selected checkpoint is step 0 (stage-2 arms: the stage-1 model is returned unchanged)"""
-    g = df.assign(step0=df.best_step == 0).groupby("exp").agg(runs=("step0", "size"), at_step0=("step0", "sum"))
-    return g.reindex([e for e in EXPS if e in g.index]).astype(int)
-
 def tuned_vs_default(dd, dt):
     """mean over sets of seed 0 (the only seed the tuned runs have), default vs tuned, for every metric; paired Wilcoxon across sets on QWK"""
     rows = []
@@ -110,14 +89,12 @@ def main(tag="default"):
     best.to_csv(ROOT / "results" / f"counts_best_run{sfx}.csv", index=False)
 
     md = [f"# Results summary (test set), tag: {tag}\n",
-          "Headline: per-seed mean over EssaySets, then mean ± std over seeds. Regression arms (E6, E7, E8, E11) use dev-fit thresholds; ",
+          "Headline: per-seed mean over EssaySets, then mean ± std over seeds. Regression arms (E6, E7, E12) use dev-fit thresholds; ",
           "rounding to the nearest observed score is the secondary table. `abs_smd` is |SMD|; the signed SMD is in the per-set tables.\n",
           "## Headline (primary decoding)\n", headline(df).to_markdown(), "\n",
-          "## Selected checkpoint at step 0 (stage-2 arms return their stage-1 model unchanged)\n", step0_table(df).to_markdown(), "\n",
           "## Headline, regression arms with rounding (secondary)\n", headline(df, "_round").to_markdown(), "\n",
-          "## Budgets (examples seen, mean over runs; stage 1 + stage 2)\n",
-          df.groupby("exp")[["steps", "examples_stage1", "examples_stage2", "examples_total", "time_stage1", "time_stage2", "time_total"]].mean().reindex(
-              [e for e in EXPS if e in set(df.exp)]).round(0).to_markdown(), "\n", "Matched stage-2 budgets (controls):", *budget_checks(df), "\n",
+          "## Budgets (mean over runs)\n",
+          df.groupby("exp")[["steps", "examples_seen", "train_time"]].mean().reindex([e for e in EXPS if e in set(df.exp)]).round(0).to_markdown(), "\n",
           "## Planned comparisons (section 6.3)\n",
           "Columns: mean difference of per-set seed means (A - B), paired Wilcoxon across the EssaySets (p), sets where A is better, sets with per-set seed-paired Wilcoxon p<0.05 ",
           "(with 5 seeds the smallest attainable per-set p is 0.0625, so that count is 0 at n=5). Regression arms use thresholded predictions.\n"]

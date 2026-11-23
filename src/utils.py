@@ -10,9 +10,8 @@ from eval import all_metrics, bootstrap_ci, fit_thresholds, apply_thresholds, ro
 from model import build_model
 
 ROOT = Path(__file__).resolve().parent.parent
-CKPT_DIR = Path(os.environ.get("RF_CKPT_DIR", Path.home() / "rf_ckpt"))
 DEFAULTS = dict(arm="sft", head="mc", lr=2e-5, batch_size=8, epochs=10, max_steps=None, warmup_frac=0.06, weight_decay=0.01,
-                eval_every=50, patience=None, grad_clip=1.0, warm_from=None, warm_tag=None, save_ckpt=False,
+                eval_every=50, patience=None, grad_clip=1.0,
                 G=8, kl_beta=0.0, dpo_beta=0.1,   # dpo_beta is beta for mc and beta' = beta / sigma^2 for reg
                 grpo_sigma=0.5)                   # reg GRPO only: fixed std of the Gaussian policy on the standardized scale
 
@@ -85,9 +84,6 @@ def decode(head, out, st, y=None, th=None):
     return apply_thresholds(mu, th), th, round_to_scores(mu, st.scores)
 
 # ---------------------------------------------------------------- training
-def ckpt_path(exp, tag, essay_set, seed):
-    return CKPT_DIR / exp / (tag or "default") / f"set{essay_set}" / f"seed{seed}.pt"
-
 def run(cfg, make_loss, exp, seed, tag=None, essay_set=1):
     """make_loss(cfg, env) -> loss_fn(out, y, idx) -> (loss, diag dict). env has K, head, ref_out, N, gen, zvals."""
     device = "cuda"
@@ -104,11 +100,6 @@ def run(cfg, make_loss, exp, seed, tag=None, essay_set=1):
     T = cfg["max_steps"] or cfg["epochs"] * spe
     name = f"{exp}/{tag} s{seed} set{essay_set}"
     model = build_model(meta["model"], K, seed, head).to(device)
-    stage1 = None
-    if cfg["warm_from"]:
-        model.load_state_dict(torch.load(ckpt_path(cfg["warm_from"], cfg["warm_tag"], essay_set, seed), map_location=device))
-        s1 = json.load(open(ROOT / "results" / cfg["warm_from"] / (cfg["warm_tag"] or "default") / f"seed{seed}" / f"set{essay_set}" / "metrics.json"))
-        stage1 = dict(exp=cfg["warm_from"], steps=s1["steps"], examples_seen=s1["examples_seen"], train_time=s1["total_train_time"])
     # frozen reference = starting policy; its outputs are precomputed once per training example
     ref_out = torch.tensor(predict_out(model, data["train"], pad_id, device)).to(device)
     gen = torch.Generator(device=device); gen.manual_seed(seed)
@@ -172,16 +163,13 @@ def run(cfg, make_loss, exp, seed, tag=None, essay_set=1):
     steps_run = step
 
     model.load_state_dict(best["state"])
-    if cfg["save_ckpt"]:
-        p = ckpt_path(exp, tag, essay_set, seed); p.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(best["state"], p)
     o_dev, o_test = predict_out(model, data["dev"], pad_id, device), predict_out(model, data["test"], pad_id, device)
     yd, yt = data["dev"]["y"], data["test"]["y"]
     pd_, th, rd = decode(head, o_dev, st, yd)
     pt, _, rt = decode(head, o_test, st, th=th)
     res = dict(exp=exp, tag=tag, seed=seed, essay_set=essay_set, head=head, n_train=N, steps=T, steps_run=steps_run, cfg=cfg, scores=scores,
                best_step=best["step"], best_examples=best["step"] * cfg["batch_size"],
-               examples_seen=steps_run * cfg["batch_size"], stage1=stage1,
+               examples_seen=steps_run * cfg["batch_size"],
                train_time_to_best=next(c["train_time"] for c in curve if c["step"] == best["step"]), total_train_time=train_time,
                dev=all_metrics(yd, pd_, scores), test=all_metrics(yt, pt, scores, with_per_class=True),
                test_ci=bootstrap_ci(yt, pt, scores, n=300, seed=seed), curve=curve)

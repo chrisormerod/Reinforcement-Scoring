@@ -1,14 +1,12 @@
 """Run experiment phases with a few concurrent worker processes. Jobs whose metrics.json exists are skipped by the trainer.
 usage: python src/launch.py PHASE [--workers 3] [--essay_sets 1 2] [--seeds 0 1]
 
-Order (stage-2 arms need stage-1 checkpoints of the same seed):
-  tune1      random search for E1,E2,E3,E6,E7,E12 on the tuning seeds -> select1  (writes configs/tuned.json)
-  tuneseeds  E1,E6 at their selected LR on the tuning seeds (stage-1 checkpoints for tuning E4,E5,E8,E13)
-  tune2      random search for E4,E5,E8,E13                          -> select2
-  final1     E1,E2,E3,E6,E7,E12 on the final seeds
-  final2     E4,E5,E8,E13 and the controls E9,E10,E11 on the final seeds (controls reuse the stage-1 arm's LR; E11 also controls E13)
-Every arm gets N_CONFIGS configurations x len(TUNE_SEEDS) seeds x all essay sets; one configuration per arm is chosen by
-mean dev QWK across sets and seeds. Tuning runs live in results/tune_<E>/<cfg>; seeds >= 100 are never reported."""
+Six arms, all trained from the pretrained backbone (cold start): E1 E6 (SFT), E2 E7 (DPO), E3 E12 (GRPO).
+  tune    random search for every arm on the tuning seeds
+  select  pick one configuration per arm by mean dev QWK (writes configs/tuned.json)
+  final   every arm on the final seeds at its selected configuration
+Every arm gets N_CONFIGS configurations x len(TUNE_SEEDS) seeds x all essay sets. Tuning runs live in results/tune_<E>/<cfg>;
+seeds >= 100 are never reported."""
 import argparse, json, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,8 +15,7 @@ import numpy as np, yaml
 ROOT = Path(__file__).resolve().parent.parent
 TUNED = ROOT / "configs" / "tuned.json"
 N_CONFIGS, TUNE_SEEDS, FINAL_SEEDS = 6, (100, 101), tuple(range(5))
-TUNE1, TUNE2 = ["E1", "E2", "E3", "E6", "E7", "E12"], ["E4", "E5", "E8", "E13"]
-CONTROL_LR_FROM = {"E9": "E1", "E10": "E1", "E11": "E6"}   # controls reuse the stage-1 arm's selected LR
+ARMS = ["E1", "E2", "E3", "E6", "E7", "E12"]
 ESSAY_SETS = []  # empty = all sets
 
 cfg_of = lambda base: yaml.safe_load(open(ROOT / "configs" / f"{base}.yaml"))
@@ -38,7 +35,7 @@ def sample_configs(base, n=N_CONFIGS):
     return out
 
 def tuned(base):
-    return json.load(open(TUNED))[CONTROL_LR_FROM.get(base, base)]
+    return json.load(open(TUNED))[base]
 
 def job(base, seed, exp=None, tag=None, params=None, extra=()):
     c = cfg_of(base)
@@ -50,8 +47,8 @@ def job(base, seed, exp=None, tag=None, params=None, extra=()):
     if ESSAY_SETS: cmd += ["--essay_sets", *map(str, ESSAY_SETS)]
     return cmd
 
-def tune_jobs(bases, seeds):   # no checkpoints are kept for tuning runs
-    return [job(b, s, f"tune_{b}", f"c{i}", p, ["save_ckpt=false"]) for b in bases for i, p in enumerate(sample_configs(b)) for s in seeds]
+def tune_jobs(bases, seeds):
+    return [job(b, s, f"tune_{b}", f"c{i}", p) for b in bases for i, p in enumerate(sample_configs(b)) for s in seeds]
 
 def select(bases):
     """per-arm configuration with the best mean dev QWK over all sets and tuning seeds (test set never used)"""
@@ -76,20 +73,14 @@ def final_jobs(bases, seeds):
     return [job(b, s, params=tuned(b)) for b in bases for s in seeds]
 
 def phases(seeds):
-    return {
-        "tune1": lambda: tune_jobs(TUNE1, TUNE_SEEDS),
-        "tuneseeds": lambda: final_jobs(["E1", "E6"], TUNE_SEEDS),
-        "tune2": lambda: tune_jobs(TUNE2, TUNE_SEEDS),
-        "final1": lambda: final_jobs(TUNE1, seeds),
-        "final2": lambda: final_jobs(TUNE2 + list(CONTROL_LR_FROM), seeds),
-    }
+    return {"tune": lambda: tune_jobs(ARMS, TUNE_SEEDS), "final": lambda: final_jobs(ARMS, seeds)}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("phase"); ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--essay_sets", nargs="*", type=int, default=[]); ap.add_argument("--seeds", nargs="*", type=int, default=list(FINAL_SEEDS))
     a = ap.parse_args(); ESSAY_SETS[:] = a.essay_sets
-    if a.phase in ("select1", "select2"):
-        select(TUNE1 if a.phase == "select1" else TUNE2); sys.exit()
+    if a.phase == "select":
+        select(ARMS); sys.exit()
     jobs = phases(tuple(a.seeds))[a.phase]()
     log = ROOT / "results" / "logs"; log.mkdir(parents=True, exist_ok=True)
     def go(i_c):
